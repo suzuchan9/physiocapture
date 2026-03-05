@@ -1,0 +1,1574 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PhysioCapture">
+  <title>PhysioCapture Pro - 関節角度測定システム</title>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #070b14;
+      --bg-card: #0d1428;
+      --bg-panel: #111827;
+      --accent: #00d4ff;
+      --accent2: #7c3aed;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --border: rgba(0,212,255,0.15);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: var(--bg-dark);
+      color: var(--text);
+      font-family: -apple-system, 'Hiragino Sans', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── HEADER ── */
+    header {
+      background: linear-gradient(135deg, #0d1428 0%, #1a0533 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .logo-text {
+      font-size: 15px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo-sub {
+      font-size: 10px;
+      color: var(--text-dim);
+      -webkit-text-fill-color: var(--text-dim);
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0,212,255,0.1);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 10px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: background 0.3s;
+    }
+    .status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.recording { background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 1s infinite; }
+
+    /* ── TAB NAV ── */
+    .tab-nav {
+      display: flex;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 4px;
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+    }
+    .tab-btn .tab-icon { font-size: 18px; }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom: 2px solid var(--accent);
+    }
+
+    /* ── TAB CONTENT ── */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── CAMERA TAB ── */
+    .view-selector {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      background: var(--bg-card);
+    }
+    .view-btn {
+      flex: 1;
+      padding: 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-panel);
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .view-btn.active {
+      background: linear-gradient(135deg, rgba(0,212,255,0.15), rgba(124,58,237,0.15));
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Camera wrapper */
+    .camera-wrapper {
+      position: relative;
+      width: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    #videoEl {
+      width: 100%;
+      display: block;
+      transform: scaleX(-1); /* mirror for front cam */
+    }
+    #videoEl.no-mirror { transform: none; }
+    #overlayCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    /* Angle labels on video */
+    .angle-overlay {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      pointer-events: none;
+    }
+    .angle-chip {
+      background: rgba(0,0,0,0.7);
+      border: 1px solid rgba(0,212,255,0.4);
+      border-radius: 6px;
+      padding: 3px 7px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fff;
+      backdrop-filter: blur(4px);
+    }
+    .angle-chip span { color: var(--accent); }
+
+    /* FPS indicator */
+    .fps-indicator {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      background: rgba(0,0,0,0.6);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+
+    /* ── CONTROLS ── */
+    .controls {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--bg-card);
+    }
+    .controls-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .btn {
+      flex: 1;
+      padding: 12px 8px;
+      border-radius: 12px;
+      border: none;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #0090cc);
+      color: #000;
+    }
+    .btn-danger { background: linear-gradient(135deg, var(--red), #cc2222); color: #fff; }
+    .btn-success { background: linear-gradient(135deg, var(--green), #059669); color: #fff; }
+    .btn-secondary {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-sm { padding: 8px 10px; font-size: 11px; flex: 0 0 auto; }
+    .btn:disabled { opacity: 0.4; pointer-events: none; }
+    .btn:active { transform: scale(0.96); }
+
+    /* Camera flip button */
+    .flip-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid var(--border);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* ── JOINT ANGLE CARDS ── */
+    .angles-section {
+      padding: 10px 12px;
+      background: var(--bg-dark);
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+    .angles-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .angle-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      position: relative;
+      overflow: hidden;
+    }
+    .angle-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 3px; height: 100%;
+      background: var(--accent);
+      border-radius: 2px 0 0 2px;
+    }
+    .angle-card.left::before { background: #06b6d4; }
+    .angle-card.right::before { background: #a855f7; }
+    .angle-label {
+      font-size: 9px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 3px;
+    }
+    .angle-value {
+      font-size: 22px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      line-height: 1;
+    }
+    .angle-value.normal { color: var(--green); }
+    .angle-value.warning { color: var(--yellow); }
+    .angle-value.alert { color: var(--red); }
+    .angle-unit { font-size: 11px; font-weight: 400; color: var(--text-dim); }
+    .angle-range { font-size: 9px; color: var(--text-dim); margin-top: 2px; }
+
+    /* ── GRAPH TAB ── */
+    .graph-section {
+      padding: 12px;
+      background: var(--bg-dark);
+    }
+    .joint-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .joint-toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .joint-toggle input { display: none; }
+    .toggle-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    .joint-toggle:has(input:checked) {
+      background: rgba(0,212,255,0.1);
+      border-color: var(--accent);
+    }
+    .chart-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      height: 250px;
+      position: relative;
+    }
+    .export-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    /* ── VIDEO TAB ── */
+    .video-section {
+      padding: 12px;
+    }
+    .video-preview {
+      width: 100%;
+      border-radius: 12px;
+      background: #000;
+      display: none;
+    }
+    .no-video-msg {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+    .no-video-msg .icon { font-size: 48px; margin-bottom: 12px; }
+
+    /* ── INFO TAB ── */
+    .info-section {
+      padding: 12px;
+    }
+    .info-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .info-card h3 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
+    .info-card p, .info-card li { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+    .info-card ul { padding-left: 16px; }
+    .info-card li { margin-bottom: 4px; }
+
+    /* ── MODEL SELECTOR ── */
+    .model-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .model-row select {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-size: 11px;
+      flex: 1;
+    }
+
+    /* ── LOADING OVERLAY ── */
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(7,11,20,0.95);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      gap: 16px;
+    }
+    .loading-overlay.hidden { display: none; }
+    .loader-ring {
+      width: 60px;
+      height: 60px;
+      border: 3px solid rgba(0,212,255,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .loading-text { font-size: 14px; color: var(--text-dim); }
+    .loading-sub { font-size: 11px; color: var(--text-dim); opacity: 0.6; }
+
+    /* ── TOAST ── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 18px;
+      font-size: 12px;
+      color: var(--text);
+      z-index: 9999;
+      transition: transform 0.3s;
+      white-space: nowrap;
+      backdrop-filter: blur(10px);
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.success { border-color: var(--green); }
+    .toast.error { border-color: var(--red); }
+
+    /* ── ANIMATIONS ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
+      70% { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+      100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    }
+    .recording-pulse { animation: pulse 1.5s infinite; }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Confidence bar */
+    .conf-bar {
+      height: 2px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .conf-fill {
+      height: 100%;
+      background: var(--green);
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+
+    /* Plane info badge */
+    .plane-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(0,0,0,0.7);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      backdrop-filter: blur(4px);
+    }
+  </style>
+</head>
+<body>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loader-ring"></div>
+  <div class="loading-text">PhysioCapture Pro</div>
+  <div class="loading-sub" id="loadingStatus">AIモデルを読み込み中...</div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🦴</div>
+    <div>
+      <div class="logo-text">PhysioCapture Pro</div>
+      <div class="logo-sub">関節角度測定システム</div>
+    </div>
+  </div>
+  <div class="status-badge">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">待機中</span>
+  </div>
+</header>
+
+<!-- TAB NAV -->
+<nav class="tab-nav">
+  <button class="tab-btn active" onclick="switchTab('camera')">
+    <span class="tab-icon">📷</span>撮影・解析
+  </button>
+  <button class="tab-btn" onclick="switchTab('graph')">
+    <span class="tab-icon">📊</span>グラフ
+  </button>
+  <button class="tab-btn" onclick="switchTab('video')">
+    <span class="tab-icon">🎬</span>動画
+  </button>
+  <button class="tab-btn" onclick="switchTab('info')">
+    <span class="tab-icon">ℹ️</span>使い方
+  </button>
+</nav>
+
+<!-- ─────────── CAMERA TAB ─────────── -->
+<div class="tab-content active" id="tab-camera">
+
+  <!-- View mode selector -->
+  <div class="view-selector">
+    <button class="view-btn active" id="viewFrontal" onclick="setViewMode('frontal')">
+      🧍 正面（前額面）
+    </button>
+    <button class="view-btn" id="viewSagittal" onclick="setViewMode('sagittal')">
+      🚶 側面（矢状面）
+    </button>
+  </div>
+
+  <!-- Camera area -->
+  <div class="camera-wrapper" id="cameraWrapper">
+    <video id="videoEl" autoplay playsinline muted></video>
+    <canvas id="overlayCanvas"></canvas>
+    <div class="angle-overlay" id="angleOverlay"></div>
+    <div class="plane-badge" id="planeBadge">正面</div>
+    <div class="fps-indicator" id="fpsIndicator">-- fps</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="controls-row">
+      <button class="btn btn-primary" id="startBtn" onclick="startCamera()">
+        ▶ カメラ開始
+      </button>
+      <button class="btn btn-danger" id="stopBtn" onclick="stopCamera()" disabled>
+        ■ 停止
+      </button>
+      <button class="flip-btn" id="flipBtn" onclick="flipCamera()" title="カメラ切替">🔄</button>
+    </div>
+    <div class="controls-row">
+      <button class="btn btn-danger btn-sm" id="recordBtn" onclick="toggleRecording()" disabled>
+        ⏺ 録画開始
+      </button>
+      <button class="btn btn-success btn-sm" id="snapBtn" onclick="takeSnapshot()" disabled>
+        📸 スナップ
+      </button>
+      <button class="btn btn-secondary btn-sm" onclick="clearData()">
+        🗑 データ消去
+      </button>
+    </div>
+    <div class="model-row">
+      <span>モデル精度:</span>
+      <select id="modelSelect" onchange="changeModel()">
+        <option value="lightning">Lightning（高速）</option>
+        <option value="thunder">Thunder（高精度）</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Joint angle cards -->
+  <div class="angles-section" id="anglesSection">
+    <div class="section-title" id="anglesTitle">関節角度（正面）</div>
+    <div class="angles-grid" id="anglesGrid">
+      <!-- Dynamically populated -->
+    </div>
+  </div>
+</div>
+
+<!-- ─────────── GRAPH TAB ─────────── -->
+<div class="tab-content" id="tab-graph">
+  <div class="graph-section">
+    <div class="section-title">表示する関節を選択</div>
+    <div class="joint-toggles" id="jointToggles"></div>
+    <div class="chart-container">
+      <canvas id="angleChart"></canvas>
+    </div>
+    <div class="export-row">
+      <button class="btn btn-primary" onclick="exportCSV()">📄 CSV 保存</button>
+      <button class="btn btn-secondary" onclick="clearChart()">🗑 グラフ消去</button>
+    </div>
+    <div style="margin-top:10px; padding: 10px; background: var(--bg-card); border-radius: 10px; border: 1px solid var(--border);">
+      <div class="section-title" style="margin-bottom:6px;">統計サマリー</div>
+      <div id="statsTable" style="font-size:11px; color: var(--text-dim);">
+        データがありません。カメラで解析を開始してください。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────── VIDEO TAB ─────────── -->
+<div class="tab-content" id="tab-video">
+  <div class="video-section">
+    <div class="no-video-msg" id="noVideoMsg">
+      <div class="icon">🎬</div>
+      録画した動画がここに表示されます。<br>
+      カメラタブで「録画開始」ボタンを押してください。
+    </div>
+    <video id="videoPreview" class="video-preview" controls playsinline></video>
+    <div id="videoControls" style="display:none; margin-top: 12px;">
+      <button class="btn btn-primary" onclick="saveVideo()" style="width:100%">💾 動画を保存</button>
+      <p style="font-size:10px; color: var(--text-dim); margin-top:8px; text-align:center;">
+        iPhoneでは「共有→ファイルに保存」または「写真に保存」を選択してください
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────── INFO TAB ─────────── -->
+<div class="tab-content" id="tab-info">
+  <div class="info-section">
+    <div class="info-card">
+      <h3>📱 iPhoneでの起動方法</h3>
+      <ul>
+        <li><strong style="color:var(--accent)">方法①：GitHub Pages（推奨・無料）</strong></li>
+        <li>1. PhysioCapture_Pro.html を GitHub リポジトリにアップロード</li>
+        <li>2. Settings → Pages → Source を「main branch」に設定</li>
+        <li>3. 発行されたURLをiPhoneのSafariで開く</li>
+        <li style="margin-top:8px;"><strong style="color:var(--accent)">方法②：Macからローカル配信</strong></li>
+        <li>1. 「PhysioCapture_サーバー起動.command」をダブルクリック</li>
+        <li>2. iPhoneをMacと同じWi-Fiに接続</li>
+        <li>3. 表示されたURLをSafariで開く（証明書警告は「訪問」を選択）</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>📱 基本的な使い方</h3>
+      <ul>
+        <li>1. 「カメラ開始」ボタンをタップ</li>
+        <li>2. 正面または側面の撮影モードを選択</li>
+        <li>3. 患者さんを画面中央に配置（全身が入るように）</li>
+        <li>4. 骨格が自動検出され関節角度が表示されます</li>
+        <li>5. 「録画開始」で動画に骨格を重ねて保存できます</li>
+        <li>6. 「グラフ」タブで時系列グラフとCSVエクスポート</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>📐 測定される関節角度</h3>
+      <ul>
+        <li><strong style="color:var(--accent)">正面（前額面）</strong></li>
+        <li>左右 膝関節角度（外反・内反評価）</li>
+        <li>左右 股関節外転角</li>
+        <li>左右 肩関節外転角</li>
+        <li>体幹側屈角</li>
+        <li style="margin-top:6px;"><strong style="color:var(--accent)">側面（矢状面）</strong></li>
+        <li>左右 膝関節屈曲角</li>
+        <li>左右 股関節屈曲角</li>
+        <li>左右 肘関節屈曲角</li>
+        <li>左右 肩関節屈曲角</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>⚠️ 注意事項</h3>
+      <ul>
+        <li>明るい場所での撮影を推奨</li>
+        <li>患者さんの全身が画面に入るようにしてください</li>
+        <li>HTTPS環境またはlocalhost上で動作します</li>
+        <li>本アプリは理学療法士の補助ツールです。診断目的に使用しないでください</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>🤖 技術情報</h3>
+      <p>Google MoveNet（TensorFlow.js）を使用した姿勢推定。17個のランドマーク（関節点）から関節角度を計算。OpenPoseと同等のCOCO姿勢推定アーキテクチャを採用。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════
+//  CONSTANTS & CONFIG
+// ════════════════════════════════════════════════
+const CHART_MAX_POINTS = 200;
+const CONFIDENCE_THRESHOLD = 0.3;
+const COLORS = {
+  leftSide: '#06b6d4',
+  rightSide: '#a855f7',
+  neutral: '#10b981',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+};
+
+// MoveNet keypoint indices (COCO format)
+const KP = {
+  NOSE: 0, L_EYE: 1, R_EYE: 2, L_EAR: 3, R_EAR: 4,
+  L_SHOULDER: 5, R_SHOULDER: 6,
+  L_ELBOW: 7, R_ELBOW: 8,
+  L_WRIST: 9, R_WRIST: 10,
+  L_HIP: 11, R_HIP: 12,
+  L_KNEE: 13, R_KNEE: 14,
+  L_ANKLE: 15, R_ANKLE: 16
+};
+
+// Joint definitions for both views
+const JOINT_DEFS = {
+  frontal: [
+    { id: 'l_knee_f', label: '左膝（外反/内反）', pts: [KP.L_HIP, KP.L_KNEE, KP.L_ANKLE], side: 'left', normal: [170, 180], color: COLORS.leftSide },
+    { id: 'r_knee_f', label: '右膝（外反/内反）', pts: [KP.R_HIP, KP.R_KNEE, KP.R_ANKLE], side: 'right', normal: [170, 180], color: COLORS.rightSide },
+    { id: 'l_hip_abd', label: '左股関節外転', pts: [KP.L_SHOULDER, KP.L_HIP, KP.L_KNEE], side: 'left', normal: [160, 180], color: COLORS.leftSide },
+    { id: 'r_hip_abd', label: '右股関節外転', pts: [KP.R_SHOULDER, KP.R_HIP, KP.R_KNEE], side: 'right', normal: [160, 180], color: COLORS.rightSide },
+    { id: 'l_shoulder_abd', label: '左肩外転', pts: [KP.L_HIP, KP.L_SHOULDER, KP.L_ELBOW], side: 'left', normal: [0, 90], color: COLORS.leftSide },
+    { id: 'r_shoulder_abd', label: '右肩外転', pts: [KP.R_HIP, KP.R_SHOULDER, KP.R_ELBOW], side: 'right', normal: [0, 90], color: COLORS.rightSide },
+    { id: 'trunk_lat', label: '体幹側屈', pts: [KP.L_SHOULDER, KP.R_SHOULDER, KP.L_HIP], side: 'neutral', normal: [75, 105], color: COLORS.neutral },
+    { id: 'knee_align', label: '膝アライメント差', pts: null, side: 'neutral', normal: [0, 5], color: COLORS.neutral, isComputed: true },
+  ],
+  sagittal: [
+    { id: 'l_knee_s', label: '左膝屈曲', pts: [KP.L_HIP, KP.L_KNEE, KP.L_ANKLE], side: 'left', normal: [0, 30], color: COLORS.leftSide },
+    { id: 'r_knee_s', label: '右膝屈曲', pts: [KP.R_HIP, KP.R_KNEE, KP.R_ANKLE], side: 'right', normal: [0, 30], color: COLORS.rightSide },
+    { id: 'l_hip_s', label: '左股関節屈曲', pts: [KP.L_SHOULDER, KP.L_HIP, KP.L_KNEE], side: 'left', normal: [0, 30], color: COLORS.leftSide },
+    { id: 'r_hip_s', label: '右股関節屈曲', pts: [KP.R_SHOULDER, KP.R_HIP, KP.R_KNEE], side: 'right', normal: [0, 30], color: COLORS.rightSide },
+    { id: 'l_elbow', label: '左肘屈曲', pts: [KP.L_SHOULDER, KP.L_ELBOW, KP.L_WRIST], side: 'left', normal: [0, 45], color: COLORS.leftSide },
+    { id: 'r_elbow', label: '右肘屈曲', pts: [KP.R_SHOULDER, KP.R_ELBOW, KP.R_WRIST], side: 'right', normal: [0, 45], color: COLORS.rightSide },
+    { id: 'l_shoulder_s', label: '左肩屈曲', pts: [KP.L_HIP, KP.L_SHOULDER, KP.L_ELBOW], side: 'left', normal: [0, 60], color: COLORS.leftSide },
+    { id: 'r_shoulder_s', label: '右肩屈曲', pts: [KP.R_HIP, KP.R_SHOULDER, KP.R_ELBOW], side: 'right', normal: [0, 60], color: COLORS.rightSide },
+  ]
+};
+
+// Skeleton connections for drawing
+const SKELETON_CONNECTIONS = [
+  [KP.L_SHOULDER, KP.R_SHOULDER],
+  [KP.L_SHOULDER, KP.L_ELBOW], [KP.L_ELBOW, KP.L_WRIST],
+  [KP.R_SHOULDER, KP.R_ELBOW], [KP.R_ELBOW, KP.R_WRIST],
+  [KP.L_SHOULDER, KP.L_HIP], [KP.R_SHOULDER, KP.R_HIP],
+  [KP.L_HIP, KP.R_HIP],
+  [KP.L_HIP, KP.L_KNEE], [KP.L_KNEE, KP.L_ANKLE],
+  [KP.R_HIP, KP.R_KNEE], [KP.R_KNEE, KP.R_ANKLE],
+  [KP.NOSE, KP.L_EYE], [KP.NOSE, KP.R_EYE],
+  [KP.L_EYE, KP.L_EAR], [KP.R_EYE, KP.R_EAR],
+];
+
+// ════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════
+let state = {
+  detector: null,
+  stream: null,
+  animId: null,
+  isRunning: false,
+  isRecording: false,
+  viewMode: 'frontal',
+  facingMode: 'environment',
+  modelType: 'lightning',
+  currentKeypoints: null,
+  currentAngles: {},
+  angleHistory: {},       // { jointId: [{t, v}] }
+  recordedChunks: [],
+  mediaRecorder: null,
+  recordedVideoUrl: null,
+  frameCount: 0,
+  lastFpsTime: 0,
+  fps: 0,
+  chartInstance: null,
+  enabledJoints: new Set(),
+};
+
+// ════════════════════════════════════════════════
+//  UTILITIES
+// ════════════════════════════════════════════════
+function calcAngle(kps, idx) {
+  // idx = [A, B, C] where B is the vertex
+  const [ai, bi, ci] = idx;
+  const A = kps[ai], B = kps[bi], C = kps[ci];
+  if (!A || !B || !C) return null;
+  if (A.score < CONFIDENCE_THRESHOLD || B.score < CONFIDENCE_THRESHOLD || C.score < CONFIDENCE_THRESHOLD) return null;
+  const radians = Math.atan2(C.y - B.y, C.x - B.x) - Math.atan2(A.y - B.y, A.x - B.x);
+  let angle = Math.abs(radians * 180 / Math.PI);
+  if (angle > 180) angle = 360 - angle;
+  return Math.round(angle * 10) / 10;
+}
+
+function getAngleClass(angle, normal) {
+  if (angle === null) return '';
+  const [lo, hi] = normal;
+  if (angle >= lo && angle <= hi) return 'normal';
+  const margin = (hi - lo) * 0.15 + 10;
+  if (angle >= lo - margin && angle <= hi + margin) return 'warning';
+  return 'alert';
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  setTimeout(() => t.className = 'toast', 2500);
+}
+
+function setStatus(text, type = '') {
+  const dot = document.getElementById('statusDot');
+  const label = document.getElementById('statusText');
+  label.textContent = text;
+  dot.className = 'status-dot ' + type;
+}
+
+// ════════════════════════════════════════════════
+//  MODEL LOADING
+// ════════════════════════════════════════════════
+async function loadModel(type = 'lightning') {
+  const status = document.getElementById('loadingStatus');
+  status.textContent = `MoveNet ${type === 'thunder' ? 'Thunder' : 'Lightning'} を読み込み中...`;
+  try {
+    const modelType = type === 'thunder'
+      ? poseDetection.movenet.modelType.SINGLEPOSE_THUNDER
+      : poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING;
+    const detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      { modelType, enableSmoothing: true }
+    );
+    return detector;
+  } catch (e) {
+    console.error('Model load error:', e);
+    throw e;
+  }
+}
+
+// ════════════════════════════════════════════════
+//  CAMERA
+// ════════════════════════════════════════════════
+async function startCamera() {
+  try {
+    setStatus('起動中...', '');
+    const constraints = {
+      video: {
+        facingMode: state.facingMode,
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 30 }
+      }
+    };
+    state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const video = document.getElementById('videoEl');
+    video.srcObject = state.stream;
+
+    // Mirror only for front camera
+    if (state.facingMode === 'user') {
+      video.classList.remove('no-mirror');
+    } else {
+      video.classList.add('no-mirror');
+    }
+
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+
+    // Size canvas
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    state.isRunning = true;
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    document.getElementById('recordBtn').disabled = false;
+    document.getElementById('snapBtn').disabled = false;
+
+    setStatus('検出中', 'active');
+    detectLoop();
+  } catch (e) {
+    console.error('Camera error:', e);
+    showToast('カメラの起動に失敗しました: ' + e.message, 'error');
+    setStatus('エラー', '');
+  }
+}
+
+function stopCamera() {
+  if (state.isRecording) toggleRecording();
+  state.isRunning = false;
+  if (state.animId) cancelAnimationFrame(state.animId);
+  if (state.stream) {
+    state.stream.getTracks().forEach(t => t.stop());
+    state.stream = null;
+  }
+  const video = document.getElementById('videoEl');
+  video.srcObject = null;
+  const canvas = document.getElementById('overlayCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('recordBtn').disabled = true;
+  document.getElementById('snapBtn').disabled = true;
+  setStatus('待機中', '');
+}
+
+function resizeCanvas() {
+  const video = document.getElementById('videoEl');
+  const canvas = document.getElementById('overlayCanvas');
+  canvas.width = video.offsetWidth;
+  canvas.height = video.offsetHeight;
+}
+
+async function flipCamera() {
+  const wasRunning = state.isRunning;
+  if (wasRunning) {
+    if (state.stream) state.stream.getTracks().forEach(t => t.stop());
+    state.isRunning = false;
+    if (state.animId) cancelAnimationFrame(state.animId);
+  }
+  state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+  showToast(state.facingMode === 'user' ? '前面カメラに切り替えました' : '背面カメラに切り替えました');
+  if (wasRunning) {
+    await startCamera();
+  }
+}
+
+async function changeModel() {
+  const sel = document.getElementById('modelSelect');
+  state.modelType = sel.value;
+  showToast('モデルを変更中...');
+  const wasRunning = state.isRunning;
+  if (wasRunning) stopCamera();
+  document.getElementById('loadingStatus').textContent = 'モデルを切り替え中...';
+  document.getElementById('loadingOverlay').classList.remove('hidden');
+  try {
+    state.detector = await loadModel(state.modelType);
+    showToast(`MoveNet ${state.modelType === 'thunder' ? 'Thunder' : 'Lightning'} に切り替えました`, 'success');
+  } catch (e) {
+    showToast('モデル切り替えに失敗しました', 'error');
+  }
+  document.getElementById('loadingOverlay').classList.add('hidden');
+  if (wasRunning) startCamera();
+}
+
+// ════════════════════════════════════════════════
+//  POSE DETECTION LOOP
+// ════════════════════════════════════════════════
+async function detectLoop() {
+  if (!state.isRunning) return;
+  const video = document.getElementById('videoEl');
+
+  try {
+    if (video.readyState >= 2 && state.detector) {
+      const poses = await state.detector.estimatePoses(video, {
+        maxPoses: 1,
+        flipHorizontal: state.facingMode === 'user'
+      });
+
+      if (poses && poses.length > 0) {
+        state.currentKeypoints = poses[0].keypoints;
+        processAngles();
+        drawOverlay();
+        updateAngleCards();
+        recordAngles();
+        updateChart();
+      }
+    }
+  } catch (e) {
+    // Silently continue on single frame errors
+  }
+
+  // FPS counter
+  state.frameCount++;
+  const now = performance.now();
+  if (now - state.lastFpsTime >= 1000) {
+    state.fps = state.frameCount;
+    state.frameCount = 0;
+    state.lastFpsTime = now;
+    document.getElementById('fpsIndicator').textContent = state.fps + ' fps';
+  }
+
+  state.animId = requestAnimationFrame(detectLoop);
+}
+
+// ════════════════════════════════════════════════
+//  ANGLE CALCULATION
+// ════════════════════════════════════════════════
+function processAngles() {
+  const kps = state.currentKeypoints;
+  const joints = JOINT_DEFS[state.viewMode];
+  state.currentAngles = {};
+
+  joints.forEach(j => {
+    if (j.isComputed) {
+      // Knee alignment difference (frontal)
+      const lk = calcAngle(kps, [KP.L_HIP, KP.L_KNEE, KP.L_ANKLE]);
+      const rk = calcAngle(kps, [KP.R_HIP, KP.R_KNEE, KP.R_ANKLE]);
+      if (lk !== null && rk !== null) {
+        state.currentAngles[j.id] = Math.abs(lk - rk);
+      }
+    } else if (j.pts) {
+      state.currentAngles[j.id] = calcAngle(kps, j.pts);
+    }
+  });
+}
+
+function recordAngles() {
+  const t = Date.now();
+  const joints = JOINT_DEFS[state.viewMode];
+  joints.forEach(j => {
+    if (!(j.id in state.angleHistory)) state.angleHistory[j.id] = [];
+    const val = state.currentAngles[j.id];
+    if (val !== null && val !== undefined) {
+      state.angleHistory[j.id].push({ t, v: val });
+      // Keep only last 10 min of data
+      if (state.angleHistory[j.id].length > 18000) state.angleHistory[j.id].shift();
+    }
+  });
+}
+
+// ════════════════════════════════════════════════
+//  CANVAS DRAWING
+// ════════════════════════════════════════════════
+function drawOverlay() {
+  const canvas = document.getElementById('overlayCanvas');
+  const ctx = canvas.getContext('2d');
+  const video = document.getElementById('videoEl');
+  const kps = state.currentKeypoints;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!kps) return;
+
+  const scaleX = canvas.width / video.videoWidth;
+  const scaleY = canvas.height / video.videoHeight;
+
+  // Scale keypoints to canvas
+  const pts = kps.map(kp => ({
+    x: kp.x * scaleX,
+    y: kp.y * scaleY,
+    score: kp.score || 0
+  }));
+
+  // Draw skeleton connections
+  SKELETON_CONNECTIONS.forEach(([a, b]) => {
+    const pA = pts[a], pB = pts[b];
+    if (!pA || !pB) return;
+    if (pA.score < CONFIDENCE_THRESHOLD || pB.score < CONFIDENCE_THRESHOLD) return;
+
+    const isLeft = a >= 5 && a <= 9 || a === 11 || a === 13 || a === 15;
+    ctx.beginPath();
+    ctx.moveTo(pA.x, pA.y);
+    ctx.lineTo(pB.x, pB.y);
+    ctx.strokeStyle = isLeft ? 'rgba(6,182,212,0.9)' : 'rgba(168,85,247,0.9)';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  });
+
+  // Draw keypoints
+  pts.forEach((pt, i) => {
+    if (pt.score < CONFIDENCE_THRESHOLD) return;
+    const isLeft = i >= 5 && i <= 9 || i === 11 || i === 13 || i === 15;
+    const color = isLeft ? '#06b6d4' : '#a855f7';
+
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+
+  // Draw angle arcs at joints
+  const joints = JOINT_DEFS[state.viewMode];
+  joints.forEach(j => {
+    if (!j.pts) return;
+    const angle = state.currentAngles[j.id];
+    if (angle === null || angle === undefined) return;
+
+    const [ai, bi, ci] = j.pts;
+    const B = pts[bi];
+    if (!B || B.score < CONFIDENCE_THRESHOLD) return;
+
+    // Draw angle label at joint
+    const cls = getAngleClass(angle, j.normal);
+    const textColor = cls === 'normal' ? '#10b981' : cls === 'warning' ? '#f59e0b' : '#ef4444';
+
+    ctx.font = 'bold 11px -apple-system, sans-serif';
+    const label = `${Math.round(angle)}°`;
+    const tw = ctx.measureText(label).width;
+
+    // Background pill
+    const pad = 4;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    roundRect(ctx, B.x - tw/2 - pad, B.y - 20, tw + pad*2, 18, 4);
+    ctx.fill();
+
+    ctx.fillStyle = textColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, B.x, B.y - 11);
+  });
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// ════════════════════════════════════════════════
+//  ANGLE CARDS
+// ════════════════════════════════════════════════
+function buildAngleCards() {
+  const joints = JOINT_DEFS[state.viewMode];
+  const grid = document.getElementById('anglesGrid');
+  const title = document.getElementById('anglesTitle');
+  title.textContent = `関節角度（${state.viewMode === 'frontal' ? '正面' : '側面'}）`;
+
+  grid.innerHTML = joints.map(j => `
+    <div class="angle-card ${j.side}" id="card_${j.id}">
+      <div class="angle-label">${j.label}</div>
+      <div class="angle-value" id="val_${j.id}">---<span class="angle-unit">°</span></div>
+      <div class="angle-range">正常: ${j.normal[0]}〜${j.normal[1]}°</div>
+      <div class="conf-bar"><div class="conf-fill" id="conf_${j.id}" style="width:0%"></div></div>
+    </div>
+  `).join('');
+}
+
+function updateAngleCards() {
+  const joints = JOINT_DEFS[state.viewMode];
+  joints.forEach(j => {
+    const el = document.getElementById(`val_${j.id}`);
+    const angle = state.currentAngles[j.id];
+    if (!el) return;
+    if (angle !== null && angle !== undefined) {
+      el.innerHTML = `${Math.round(angle)}<span class="angle-unit">°</span>`;
+      el.className = 'angle-value ' + getAngleClass(angle, j.normal);
+
+      // Confidence bar: based on visibility of keypoints
+      const kps = state.currentKeypoints;
+      let conf = 100;
+      if (j.pts && kps) {
+        conf = Math.round(Math.min(...j.pts.map(i => (kps[i]?.score || 0))) * 100);
+      }
+      const bar = document.getElementById(`conf_${j.id}`);
+      if (bar) {
+        bar.style.width = conf + '%';
+        bar.style.background = conf > 60 ? '#10b981' : conf > 30 ? '#f59e0b' : '#ef4444';
+      }
+    } else {
+      el.innerHTML = `---<span class="angle-unit">°</span>`;
+      el.className = 'angle-value';
+    }
+  });
+}
+
+// ════════════════════════════════════════════════
+//  CHART (Chart.js)
+// ════════════════════════════════════════════════
+function buildChart() {
+  const ctx = document.getElementById('angleChart').getContext('2d');
+  const joints = [...JOINT_DEFS.frontal, ...JOINT_DEFS.sagittal];
+
+  // Build toggle UI
+  const togglesDiv = document.getElementById('jointToggles');
+  togglesDiv.innerHTML = joints.slice(0, 8).map(j => `
+    <label class="joint-toggle" style="color: ${j.color}">
+      <input type="checkbox" value="${j.id}" onchange="updateChartDatasets()">
+      <span class="toggle-dot" style="background:${j.color}"></span>
+      ${j.label.length > 10 ? j.label.slice(0, 10) + '…' : j.label}
+    </label>
+  `).join('');
+
+  state.chartInstance = new Chart(ctx, {
+    type: 'line',
+    data: { datasets: [] },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: 'linear',
+          display: false,
+        },
+        y: {
+          min: 0, max: 180,
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#94a3b8', font: { size: 10 }, stepSize: 30 }
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}°`
+          }
+        }
+      },
+      elements: {
+        point: { radius: 0 },
+        line: { borderWidth: 2, tension: 0.3 }
+      }
+    }
+  });
+}
+
+function updateChartDatasets() {
+  if (!state.chartInstance) return;
+  const checkboxes = document.querySelectorAll('#jointToggles input:checked');
+  const ids = Array.from(checkboxes).map(c => c.value);
+
+  const allJoints = [...JOINT_DEFS.frontal, ...JOINT_DEFS.sagittal];
+  state.chartInstance.data.datasets = ids.map(id => {
+    const joint = allJoints.find(j => j.id === id);
+    const hist = state.angleHistory[id] || [];
+    const startT = hist.length > 0 ? hist[0].t : 0;
+    return {
+      label: joint ? joint.label : id,
+      data: hist.map((d, i) => ({ x: i, y: d.v })),
+      borderColor: joint ? joint.color : '#fff',
+      backgroundColor: 'transparent',
+    };
+  });
+  state.chartInstance.update('none');
+}
+
+function updateChart() {
+  if (!state.chartInstance) return;
+  const checkboxes = document.querySelectorAll('#jointToggles input:checked');
+  if (checkboxes.length === 0) return;
+
+  const ids = Array.from(checkboxes).map(c => c.value);
+  const allJoints = [...JOINT_DEFS.frontal, ...JOINT_DEFS.sagittal];
+
+  state.chartInstance.data.datasets = ids.map((id, di) => {
+    const joint = allJoints.find(j => j.id === id);
+    const hist = state.angleHistory[id] || [];
+    const recentHist = hist.slice(-CHART_MAX_POINTS);
+    return {
+      label: joint ? joint.label : id,
+      data: recentHist.map((d, i) => ({ x: i, y: d.v })),
+      borderColor: joint ? joint.color : '#fff',
+      backgroundColor: 'transparent',
+    };
+  });
+  state.chartInstance.update('none');
+  updateStats();
+}
+
+function updateStats() {
+  const div = document.getElementById('statsTable');
+  const allJoints = [...JOINT_DEFS.frontal, ...JOINT_DEFS.sagittal];
+  const entries = allJoints.filter(j => state.angleHistory[j.id] && state.angleHistory[j.id].length > 0);
+  if (entries.length === 0) {
+    div.textContent = 'データがありません。カメラで解析を開始してください。';
+    return;
+  }
+  let html = '<table style="width:100%; border-collapse:collapse;">';
+  html += '<tr style="color:var(--accent); font-size:10px;"><th align="left">関節</th><th>最小</th><th>最大</th><th>平均</th></tr>';
+  entries.forEach(j => {
+    const vals = state.angleHistory[j.id].map(d => d.v);
+    const mn = Math.min(...vals).toFixed(1);
+    const mx = Math.max(...vals).toFixed(1);
+    const avg = (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+    html += `<tr style="border-top: 1px solid rgba(255,255,255,0.05);">
+      <td style="padding:4px 0; color:${j.color}">${j.label.slice(0, 8)}</td>
+      <td align="center">${mn}°</td>
+      <td align="center">${mx}°</td>
+      <td align="center">${avg}°</td>
+    </tr>`;
+  });
+  html += '</table>';
+  div.innerHTML = html;
+}
+
+function clearChart() {
+  state.angleHistory = {};
+  if (state.chartInstance) {
+    state.chartInstance.data.datasets = [];
+    state.chartInstance.update();
+  }
+  showToast('グラフデータを消去しました');
+}
+
+// ════════════════════════════════════════════════
+//  CSV EXPORT
+// ════════════════════════════════════════════════
+function exportCSV() {
+  const allJoints = [...JOINT_DEFS.frontal, ...JOINT_DEFS.sagittal];
+  const relevantJoints = allJoints.filter(j => state.angleHistory[j.id] && state.angleHistory[j.id].length > 0);
+  if (relevantJoints.length === 0) {
+    showToast('エクスポートするデータがありません', 'error');
+    return;
+  }
+
+  // Find max history length
+  const maxLen = Math.max(...relevantJoints.map(j => state.angleHistory[j.id].length));
+
+  let csv = 'フレーム,時刻(ms),' + relevantJoints.map(j => j.label).join(',') + '\n';
+
+  for (let i = 0; i < maxLen; i++) {
+    const row = [i];
+    const firstJoint = relevantJoints[0];
+    const t = state.angleHistory[firstJoint.id][i]?.t || '';
+    row.push(t);
+    relevantJoints.forEach(j => {
+      const val = state.angleHistory[j.id][i]?.v;
+      row.push(val !== undefined ? val.toFixed(2) : '');
+    });
+    csv += row.join(',') + '\n';
+  }
+
+  // Download
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 16).replace('T', '_').replace(/:/g, '-');
+  a.download = `PhysioCapture_${date}.csv`;
+  a.href = url;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('CSVを保存しました', 'success');
+}
+
+// ════════════════════════════════════════════════
+//  VIDEO RECORDING
+// ════════════════════════════════════════════════
+function toggleRecording() {
+  if (state.isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function startRecording() {
+  const canvas = document.getElementById('overlayCanvas');
+
+  // Combine video + canvas
+  const mergedCanvas = document.createElement('canvas');
+  const video = document.getElementById('videoEl');
+  mergedCanvas.width = canvas.width;
+  mergedCanvas.height = canvas.height;
+  const mCtx = mergedCanvas.getContext('2d');
+
+  state.recordingInterval = setInterval(() => {
+    // Draw video frame
+    mCtx.save();
+    if (state.facingMode === 'user') {
+      mCtx.translate(mergedCanvas.width, 0);
+      mCtx.scale(-1, 1);
+    }
+    mCtx.drawImage(video, 0, 0, mergedCanvas.width, mergedCanvas.height);
+    mCtx.restore();
+    // Draw overlay
+    mCtx.drawImage(canvas, 0, 0);
+  }, 1000 / 30);
+
+  const stream = mergedCanvas.captureStream(30);
+  state.recordedChunks = [];
+
+  let mimeType = 'video/webm;codecs=vp8';
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
+    mimeType = 'video/webm';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/mp4';
+    }
+  }
+
+  try {
+    state.mediaRecorder = new MediaRecorder(stream, { mimeType });
+    state.mediaRecorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0) state.recordedChunks.push(e.data);
+    };
+    state.mediaRecorder.onstop = () => {
+      clearInterval(state.recordingInterval);
+      const blob = new Blob(state.recordedChunks, { type: mimeType });
+      if (state.recordedVideoUrl) URL.revokeObjectURL(state.recordedVideoUrl);
+      state.recordedVideoUrl = URL.createObjectURL(blob);
+      showRecordedVideo(state.recordedVideoUrl);
+    };
+    state.mediaRecorder.start(100);
+    state.isRecording = true;
+
+    const btn = document.getElementById('recordBtn');
+    btn.textContent = '⏹ 録画停止';
+    btn.className = 'btn btn-secondary btn-sm recording-pulse';
+    setStatus('録画中', 'recording');
+    showToast('録画を開始しました', 'success');
+  } catch (e) {
+    console.error('Recording error:', e);
+    showToast('録画の開始に失敗しました: ' + e.message, 'error');
+  }
+}
+
+function stopRecording() {
+  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.mediaRecorder.stop();
+  }
+  state.isRecording = false;
+  const btn = document.getElementById('recordBtn');
+  btn.textContent = '⏺ 録画開始';
+  btn.className = 'btn btn-danger btn-sm';
+  setStatus('検出中', 'active');
+  showToast('録画を停止しました。動画タブで確認できます。', 'success');
+}
+
+function showRecordedVideo(url) {
+  const preview = document.getElementById('videoPreview');
+  const noMsg = document.getElementById('noVideoMsg');
+  const controls = document.getElementById('videoControls');
+  preview.src = url;
+  preview.style.display = 'block';
+  noMsg.style.display = 'none';
+  controls.style.display = 'block';
+}
+
+function saveVideo() {
+  if (!state.recordedVideoUrl) return;
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 16).replace('T', '_').replace(/:/g, '-');
+  a.download = `PhysioCapture_${date}.webm`;
+  a.href = state.recordedVideoUrl;
+  a.click();
+  showToast('動画を保存しました', 'success');
+}
+
+// ════════════════════════════════════════════════
+//  SNAPSHOT
+// ════════════════════════════════════════════════
+function takeSnapshot() {
+  const canvas = document.getElementById('overlayCanvas');
+  const video = document.getElementById('videoEl');
+
+  const snapCanvas = document.createElement('canvas');
+  snapCanvas.width = canvas.width;
+  snapCanvas.height = canvas.height;
+  const ctx = snapCanvas.getContext('2d');
+
+  ctx.save();
+  if (state.facingMode === 'user') {
+    ctx.translate(snapCanvas.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
+  ctx.restore();
+  ctx.drawImage(canvas, 0, 0);
+
+  // Add timestamp
+  const now = new Date().toLocaleString('ja-JP');
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, snapCanvas.height - 22, snapCanvas.width, 22);
+  ctx.fillStyle = '#fff';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillText(`PhysioCapture Pro - ${now}`, 8, snapCanvas.height - 6);
+
+  const url = snapCanvas.toDataURL('image/png');
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 16).replace('T', '_').replace(/:/g, '-');
+  a.download = `PhysioCapture_snap_${date}.png`;
+  a.href = url;
+  a.click();
+  showToast('スナップショットを保存しました', 'success');
+}
+
+// ════════════════════════════════════════════════
+//  VIEW MODE
+// ════════════════════════════════════════════════
+function setViewMode(mode) {
+  state.viewMode = mode;
+  document.getElementById('viewFrontal').classList.toggle('active', mode === 'frontal');
+  document.getElementById('viewSagittal').classList.toggle('active', mode === 'sagittal');
+  document.getElementById('planeBadge').textContent = mode === 'frontal' ? '正面' : '側面';
+  buildAngleCards();
+}
+
+// ════════════════════════════════════════════════
+//  TABS
+// ════════════════════════════════════════════════
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  document.querySelectorAll('.tab-btn')[['camera', 'graph', 'video', 'info'].indexOf(tab)].classList.add('active');
+}
+
+// ════════════════════════════════════════════════
+//  CLEAR DATA
+// ════════════════════════════════════════════════
+function clearData() {
+  state.angleHistory = {};
+  state.currentAngles = {};
+  updateAngleCards();
+  if (state.chartInstance) {
+    state.chartInstance.data.datasets = [];
+    state.chartInstance.update();
+  }
+  showToast('全データを消去しました');
+}
+
+// ════════════════════════════════════════════════
+//  INITIALIZATION
+// ════════════════════════════════════════════════
+async function init() {
+  buildAngleCards();
+  buildChart();
+
+  try {
+    document.getElementById('loadingStatus').textContent = 'TensorFlow.js を初期化中...';
+    await tf.ready();
+    document.getElementById('loadingStatus').textContent = 'MoveNet モデルを読み込み中...';
+    state.detector = await loadModel('lightning');
+    document.getElementById('loadingOverlay').classList.add('hidden');
+    showToast('PhysioCapture Pro が起動しました', 'success');
+    setStatus('待機中', '');
+  } catch (e) {
+    console.error('Init error:', e);
+    document.getElementById('loadingStatus').textContent = 'エラー: ' + e.message + '\n再読み込みしてください';
+  }
+}
+
+// Handle orientation change
+window.addEventListener('orientationchange', () => {
+  setTimeout(resizeCanvas, 300);
+});
+
+init();
+</script>
+</body>
+</html>
